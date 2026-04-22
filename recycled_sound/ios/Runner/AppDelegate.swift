@@ -13,11 +13,13 @@ import UIKit
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
 
-    // Register Object Capture (LiDAR 3D scanning) platform channel + view
-    if let controller = window?.rootViewController as? FlutterViewController {
-      let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ObjectCaptureView")
+    // Register Object Capture (LiDAR 3D scanning) platform channel + view.
+    // Use the plugin registry's registrar to get the binary messenger —
+    // window?.rootViewController is nil with scene-based lifecycle.
+    let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "ObjectCaptureView")
+    if let registrar = registrar {
       ObjectCapturePluginRegistrar.register(
-        with: controller.binaryMessenger,
+        with: registrar.messenger(),
         registrar: registrar
       )
     }

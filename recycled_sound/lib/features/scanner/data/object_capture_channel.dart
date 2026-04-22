@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Platform channel client for Apple's Object Capture API.
@@ -61,7 +62,11 @@ class ObjectCaptureChannel {
     try {
       final result = await _channel.invokeMethod<bool>('isSupported');
       return result ?? false;
-    } on MissingPluginException {
+    } on MissingPluginException catch (e) {
+      debugPrint('ObjectCapture: MissingPluginException — $e');
+      return false;
+    } catch (e) {
+      debugPrint('ObjectCapture: isSupported error — $e');
       return false;
     }
   }
