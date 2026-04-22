@@ -1,18 +1,22 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:arkit_plugin/arkit_plugin.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_typography.dart';
-import '../data/object_capture_channel.dart';
+import '../data/point_cloud.dart';
+import 'widgets/point_cloud_viewer.dart';
 
-/// 3D capture screen — uses LiDAR Object Capture to build a USDZ model.
+/// 3D capture screen — uses LiDAR depth tracking to build a real-time
+/// point cloud of the hearing aid, which can then be spun with your finger.
 ///
 /// Flow:
-/// 1. Check device support
-/// 2. Start capture session — user orbits the hearing aid
-/// 3. Guidance text helps the user ("move closer", "slow down")
-/// 4. When enough shots are taken, finish and reconstruct
-/// 5. Navigate to model viewer with the USDZ file
+/// 1. ARKit depth session starts with LiDAR
+/// 2. Depth frames are captured periodically (~5 fps)
+/// 3. Points accumulate as user orbits the device
+/// 4. When done, switches to interactive point cloud viewer
 class Capture3dScreen extends StatefulWidget {
   const Capture3dScreen({super.key, this.deviceName});
 
@@ -23,88 +27,110 @@ class Capture3dScreen extends StatefulWidget {
   State<Capture3dScreen> createState() => _Capture3dScreenState();
 }
 
+enum _CapturePhase { scanning, viewing }
+
 class _Capture3dScreenState extends State<Capture3dScreen> {
-  final _capture = ObjectCaptureChannel.instance;
-
-  String _state = 'idle';
-  String _guidance = 'Point at the hearing aid';
-  int _shotsTaken = 0;
-  bool _isComplete = false;
-  double _reconstructionProgress = 0.0;
-  String? _modelPath;
-  bool _isSupported = false;
-  bool _checking = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _capture.startListening();
-    _capture.onStateChanged = (state) {
-      if (mounted) setState(() => _state = state);
-    };
-    _capture.onProgress = (shots, complete) {
-      if (mounted) {
-        setState(() {
-          _shotsTaken = shots;
-          _isComplete = complete;
-        });
-      }
-    };
-    _capture.onGuidance = (guidance) {
-      if (mounted) setState(() => _guidance = guidance);
-    };
-    _capture.onReconstructionProgress = (progress) {
-      if (mounted) setState(() => _reconstructionProgress = progress);
-    };
-    _capture.onModelReady = (path) {
-      if (mounted) {
-        setState(() {
-          _modelPath = path;
-          _state = 'done';
-        });
-      }
-    };
-
-    _checkSupport();
-  }
-
-  Future<void> _checkSupport() async {
-    final supported = await _capture.isSupported();
-    if (mounted) {
-      setState(() {
-        _isSupported = supported;
-        _checking = false;
-      });
-      if (supported) _startCapture();
-    }
-  }
-
-  Future<void> _startCapture() async {
-    try {
-      await _capture.startSession();
-    } catch (e) {
-      if (mounted) {
-        setState(() => _state = 'error');
-      }
-    }
-  }
-
-  Future<void> _finishCapture() async {
-    setState(() => _state = 'reconstructing');
-    try {
-      await _capture.finish();
-    } catch (e) {
-      if (mounted) {
-        setState(() => _state = 'error');
-      }
-    }
-  }
+  ARKitController? _arkitController;
+  final _cloud = PointCloudBuilder(maxPoints: 60000, voxelSize: 0.001);
+  Timer? _captureTimer;
+  _CapturePhase _phase = _CapturePhase.scanning;
+  int _framesCaptured = 0;
+  String _status = 'Initialising LiDAR...';
+  bool _disposed = false;
 
   @override
   void dispose() {
-    _capture.cancel();
-    _capture.stopListening();
+    _disposed = true;
+    _captureTimer?.cancel();
+    _arkitController?.dispose();
     super.dispose();
+  }
+
+  void _onARKitViewCreated(ARKitController controller) {
+    _arkitController = controller;
+    setState(() => _status = 'Point at the hearing aid and slowly orbit');
+
+    // Capture depth frames every 200ms (~5 fps)
+    _captureTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      _captureDepthFrame();
+    });
+  }
+
+  Future<void> _captureDepthFrame() async {
+    if (_disposed || _arkitController == null) return;
+    if (_phase != _CapturePhase.scanning) return;
+
+    try {
+      final snapshot = await _arkitController!.snapshotWithDepthData();
+      if (snapshot == null || _disposed) return;
+
+      final depthList = snapshot['depthMap'];
+      final depthWidth = snapshot['depthWidth'] as int?;
+      final depthHeight = snapshot['depthHeight'] as int?;
+      final intrinsics = snapshot['intrinsics'] as String?;
+
+      if (depthList == null || depthWidth == null || depthHeight == null) return;
+
+      // Parse depth data
+      final Float32List depthData;
+      if (depthList is Float32List) {
+        depthData = depthList;
+      } else if (depthList is List) {
+        depthData = Float32List.fromList(
+          depthList.map((e) => (e as num).toDouble()).toList(),
+        );
+      } else {
+        return;
+      }
+
+      // Parse intrinsics: "fx fy cx cy" format
+      double fx = 500, fy = 500, cx = 0, cy = 0;
+      if (intrinsics != null) {
+        final parts = intrinsics.split(RegExp(r'[\s,]+'));
+        if (parts.length >= 4) {
+          fx = double.tryParse(parts[0]) ?? 500;
+          fy = double.tryParse(parts[1]) ?? 500;
+          cx = double.tryParse(parts[2]) ?? depthWidth / 2;
+          cy = double.tryParse(parts[3]) ?? depthHeight / 2;
+        }
+      } else {
+        cx = depthWidth / 2;
+        cy = depthHeight / 2;
+      }
+
+      // Get camera pose
+      final pov = await _arkitController!.pointOfViewTransform();
+      final cameraPose = pov ?? Matrix4.identity();
+
+      _cloud.addFrame(
+        depthData: depthData,
+        depthWidth: depthWidth,
+        depthHeight: depthHeight,
+        fx: fx,
+        fy: fy,
+        cx: cx,
+        cy: cy,
+        cameraPose: cameraPose,
+      );
+
+      if (!_disposed && mounted) {
+        setState(() {
+          _framesCaptured++;
+          _status =
+              '${_cloud.count} points from $_framesCaptured frames';
+        });
+      }
+    } catch (e) {
+      // Depth capture can fail transiently — just skip the frame
+    }
+  }
+
+  void _finishScanning() {
+    _captureTimer?.cancel();
+    setState(() {
+      _phase = _CapturePhase.viewing;
+      _status = '${_cloud.count} points — spin it!';
+    });
   }
 
   @override
@@ -112,322 +138,212 @@ class _Capture3dScreenState extends State<Capture3dScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: Column(
+        top: false,
+        child: Stack(
+          fit: StackFit.expand,
           children: [
+            // AR camera view (scanning phase) or point cloud (viewing phase)
+            if (_phase == _CapturePhase.scanning)
+              ARKitSceneView(
+                configuration: ARKitConfiguration.worldTracking,
+                onARKitViewCreated: _onARKitViewCreated,
+              )
+            else
+              PointCloudViewer(
+                cloud: _cloud,
+                pointSize: 2.5,
+              ),
+
+            // Live point cloud overlay during scanning
+            if (_phase == _CapturePhase.scanning && _cloud.count > 0)
+              Positioned(
+                right: 0,
+                top: MediaQuery.of(context).padding.top + 50,
+                width: 160,
+                height: 160,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.4),
+                      width: 1,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(7),
+                    child: PointCloudViewer(
+                      cloud: _cloud,
+                      pointSize: 1.5,
+                      autoRotate: true,
+                    ),
+                  ),
+                ),
+              ),
+
             // Header
-            Padding(
-              padding: const EdgeInsets.all(16),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 8,
               child: Row(
                 children: [
                   IconButton(
                     icon: const Icon(Icons.close, color: AppColors.white),
                     onPressed: () => context.pop(),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+                  const SizedBox(width: 4),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _phase == _CapturePhase.scanning
+                            ? '3D SCAN'
+                            : '3D MODEL',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.white,
+                          letterSpacing: 2.0,
+                        ),
+                      ),
+                      if (widget.deviceName != null)
                         Text(
-                          '3D CAPTURE',
-                          style: AppTypography.h4.copyWith(
-                            color: AppColors.white,
-                            letterSpacing: 2.0,
+                          widget.deviceName!,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                            color: AppColors.white.withValues(alpha: 0.6),
                           ),
                         ),
-                        if (widget.deviceName != null)
-                          Text(
-                            widget.deviceName!,
-                            style: AppTypography.caption.copyWith(
-                              color: AppColors.white.withValues(alpha: 0.6),
-                            ),
-                          ),
-                      ],
-                    ),
+                    ],
                   ),
                 ],
               ),
             ),
 
-            // Main content area
-            Expanded(
-              child: _checking
-                  ? _buildChecking()
-                  : !_isSupported
-                      ? _buildNotSupported()
-                      : _state == 'reconstructing'
-                          ? _buildReconstructing()
-                          : _state == 'done'
-                              ? _buildDone()
-                              : _state == 'error'
-                                  ? _buildError()
-                                  : _buildCapturing(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildChecking() {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          CircularProgressIndicator(color: AppColors.primary),
-          SizedBox(height: 16),
-          Text(
-            'CHECKING LIDAR...',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              color: Color(0x99FFFFFF),
-              letterSpacing: 2.0,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNotSupported() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.view_in_ar, color: AppColors.textMuted, size: 48),
-            const SizedBox(height: 16),
-            Text(
-              '3D Capture Not Available',
-              style: AppTypography.h3.copyWith(color: AppColors.white),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'This feature requires a LiDAR-equipped iPhone (12 Pro or later) running iOS 17+.',
-              style: AppTypography.body.copyWith(
-                color: AppColors.white.withValues(alpha: 0.6),
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCapturing() {
-    return Column(
-      children: [
-        // The AR view would go here — for now showing guidance
-        Expanded(
-          child: Container(
-            margin: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: AppColors.primary.withValues(alpha: 0.3),
-                width: 1,
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Animated orbit indicator
-                  SizedBox(
-                    width: 120,
-                    height: 120,
-                    child: CircularProgressIndicator(
-                      value: _shotsTaken / 30, // ~30 shots for full orbit
-                      strokeWidth: 3,
-                      color: AppColors.success,
-                      backgroundColor: const Color(0x22FFFFFF),
-                    ),
+            // Bottom controls
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xDD000000)],
                   ),
-                  const SizedBox(height: 24),
-                  Text(
-                    '$_shotsTaken SHOTS',
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 24,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.white,
-                      letterSpacing: 2.0,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _guidance.toUpperCase(),
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: Color(0x99FFFFFF),
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _state.toUpperCase(),
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 10,
-                      color: _state == 'capturing'
-                          ? AppColors.success
-                          : const Color(0x66FFFFFF),
-                      letterSpacing: 1.0,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-
-        // Bottom controls
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            children: [
-              if (_isComplete || _shotsTaken >= 20)
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _finishCapture,
-                    icon: const Icon(Icons.view_in_ar, size: 18),
-                    label: const Text('Build 3D Model'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      foregroundColor: AppColors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.fromLTRB(20, 32, 20, 40),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Status
+                    Text(
+                      _status.toUpperCase(),
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: Color(0x99FFFFFF),
+                        letterSpacing: 1.0,
                       ),
                     ),
-                  ),
-                )
-              else
-                Text(
-                  'Slowly orbit the hearing aid',
-                  style: AppTypography.bodySmall.copyWith(
-                    color: AppColors.white.withValues(alpha: 0.5),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+                    const SizedBox(height: 12),
 
-  Widget _buildReconstructing() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 80,
-            height: 80,
-            child: CircularProgressIndicator(
-              value: _reconstructionProgress > 0
-                  ? _reconstructionProgress
-                  : null,
-              strokeWidth: 3,
-              color: AppColors.primary,
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'BUILDING 3D MODEL',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: AppColors.white,
-              letterSpacing: 2.0,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _reconstructionProgress > 0
-                ? '${(_reconstructionProgress * 100).round()}%'
-                : 'Processing...',
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              color: Color(0x99FFFFFF),
-              letterSpacing: 1.0,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+                    // Point count bar
+                    if (_phase == _CapturePhase.scanning) ...[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          value: (_cloud.count / 30000).clamp(0.0, 1.0),
+                          backgroundColor: const Color(0x22FFFFFF),
+                          color: _cloud.count > 10000
+                              ? AppColors.success
+                              : AppColors.primary,
+                          minHeight: 3,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
 
-  Widget _buildDone() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.view_in_ar, color: AppColors.success, size: 64),
-          const SizedBox(height: 16),
-          const Text(
-            '3D MODEL READY',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: AppColors.success,
-              letterSpacing: 2.0,
-            ),
-          ),
-          const SizedBox(height: 24),
-          if (_modelPath != null)
-            FilledButton.icon(
-              onPressed: () {
-                // TODO: Open USDZ viewer or QuickLook
-                context.pop(_modelPath);
-              },
-              icon: const Icon(Icons.threed_rotation, size: 18),
-              label: const Text('View Model'),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: AppColors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                    // Action button
+                    if (_phase == _CapturePhase.scanning &&
+                        _cloud.count > 5000)
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _finishScanning,
+                          icon: const Icon(Icons.threed_rotation, size: 18),
+                          label: Text(
+                            'View 3D Model (${_cloud.count} points)',
+                          ),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.success,
+                            foregroundColor: AppColors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    if (_phase == _CapturePhase.viewing)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: () {
+                                _cloud.clear();
+                                setState(() {
+                                  _phase = _CapturePhase.scanning;
+                                  _framesCaptured = 0;
+                                  _status = 'Point at the hearing aid';
+                                });
+                                _captureTimer = Timer.periodic(
+                                  const Duration(milliseconds: 200),
+                                  (_) => _captureDepthFrame(),
+                                );
+                              },
+                              icon: const Icon(Icons.refresh, size: 18),
+                              label: const Text('Rescan'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0x33FFFFFF),
+                                foregroundColor: AppColors.white,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: () => context.pop(),
+                              icon: const Icon(Icons.check, size: 18),
+                              label: const Text('Done'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.primary,
+                                foregroundColor: AppColors.white,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildError() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.error_outline, color: AppColors.error, size: 48),
-          const SizedBox(height: 16),
-          Text(
-            'Capture failed',
-            style: AppTypography.h3.copyWith(color: AppColors.white),
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: () {
-              setState(() => _state = 'idle');
-              _startCapture();
-            },
-            child: const Text('Try Again'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
