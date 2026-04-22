@@ -62,7 +62,12 @@ class _Capture3dScreenState extends State<Capture3dScreen> {
 
     try {
       final snapshot = await _arkitController!.snapshotWithDepthData();
-      if (snapshot == null || _disposed) return;
+      if (snapshot == null || _disposed) {
+        if (mounted && _framesCaptured == 0 && !_disposed) {
+          setState(() => _status = 'No depth data — is LiDAR available?');
+        }
+        return;
+      }
 
       final depthList = snapshot['depthMap'];
       final depthWidth = snapshot['depthWidth'] as int?;
@@ -84,18 +89,20 @@ class _Capture3dScreenState extends State<Capture3dScreen> {
       }
 
       // Parse intrinsics: "fx fy cx cy" format
-      double fx = 500, fy = 500, cx = 0, cy = 0;
+      double fx = 500, fy = 500;
+      double cx = depthWidth / 2, cy = depthHeight / 2;
       if (intrinsics != null) {
         final parts = intrinsics.split(RegExp(r'[\s,]+'));
         if (parts.length >= 4) {
-          fx = double.tryParse(parts[0]) ?? 500;
-          fy = double.tryParse(parts[1]) ?? 500;
-          cx = double.tryParse(parts[2]) ?? depthWidth / 2;
-          cy = double.tryParse(parts[3]) ?? depthHeight / 2;
+          final pfx = double.tryParse(parts[0]);
+          final pfy = double.tryParse(parts[1]);
+          final pcx = double.tryParse(parts[2]);
+          final pcy = double.tryParse(parts[3]);
+          if (pfx != null && pfx.isFinite && pfx > 0) fx = pfx;
+          if (pfy != null && pfy.isFinite && pfy > 0) fy = pfy;
+          if (pcx != null && pcx.isFinite) cx = pcx;
+          if (pcy != null && pcy.isFinite) cy = pcy;
         }
-      } else {
-        cx = depthWidth / 2;
-        cy = depthHeight / 2;
       }
 
       // Get camera pose
@@ -121,7 +128,9 @@ class _Capture3dScreenState extends State<Capture3dScreen> {
         });
       }
     } catch (e) {
-      // Depth capture can fail transiently — just skip the frame
+      if (mounted && _framesCaptured == 0) {
+        setState(() => _status = 'Depth error: $e');
+      }
     }
   }
 
@@ -145,7 +154,7 @@ class _Capture3dScreenState extends State<Capture3dScreen> {
             // AR camera view (scanning phase) or point cloud (viewing phase)
             if (_phase == _CapturePhase.scanning)
               ARKitSceneView(
-                configuration: ARKitConfiguration.worldTracking,
+                configuration: ARKitConfiguration.depthTracking,
                 onARKitViewCreated: _onARKitViewCreated,
               )
             else

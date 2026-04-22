@@ -94,6 +94,7 @@ class PointCloudBuilder {
     for (var py = 0; py < depthHeight; py += step) {
       for (var px = 0; px < depthWidth; px += step) {
         final depth = depthData[py * depthWidth + px];
+        if (depth.isNaN || depth.isInfinite) continue;
         if (depth <= 0.01 || depth > 2.0) continue; // skip invalid/far
 
         // Back-project to camera space

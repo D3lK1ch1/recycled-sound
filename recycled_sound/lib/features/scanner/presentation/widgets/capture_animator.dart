@@ -344,9 +344,34 @@ class _DockTile extends StatelessWidget {
 
   final DockThumbnail thumbnail;
 
+  void _showFullImage(BuildContext context) {
+    if (thumbnail.imagePath == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (context) => GestureDetector(
+        onTap: () => Navigator.pop(context),
+        child: Container(
+          color: const Color(0xEE000000),
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(
+                File(thumbnail.imagePath!),
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return GestureDetector(
+      onTap: () => _showFullImage(context),
+      child: Container(
       width: 44,
       height: 44,
       decoration: BoxDecoration(
@@ -398,6 +423,7 @@ class _DockTile extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

@@ -870,6 +870,17 @@ class _LiveScanScreenState extends State<LiveScanScreen>
         }),
     ];
 
+    // Always show the data stream animation — even without catalog match.
+    // If we have no fields to fill, show a "SEARCHING" pulse so the
+    // visual effect still fires.
+    if (fields.isEmpty) {
+      _cascadeEvents.add(CascadeEvent(
+        field: 'DATABASE',
+        value: '${_detectedBrand ?? ''} ${_detectedModel ?? ''}'.trim(),
+      ));
+      setState(() {});
+    }
+
     for (var i = 0; i < fields.length; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 200));
       if (_disposed || !mounted) return;
@@ -882,18 +893,16 @@ class _LiveScanScreenState extends State<LiveScanScreen>
       _log('cascade: $label filled');
     }
 
-    // If we filled fields, auto-transition to 3D capture after a beat.
+    // Auto-transition to 3D capture after a beat.
     // The user is already holding the device — seamless handoff.
-    if (fields.isNotEmpty) {
-      await Future<void>.delayed(const Duration(seconds: 2));
-      if (_disposed || !mounted) return;
-      _stopCamera();
-      final name = [_detectedBrand, _detectedModel]
-          .where((s) => s != null && s.isNotEmpty)
-          .join(' ');
-      if (mounted) {
-        context.push('/scan/3d', extra: name.isNotEmpty ? name : null);
-      }
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (_disposed || !mounted) return;
+    _stopCamera();
+    final name = [_detectedBrand, _detectedModel]
+        .where((s) => s != null && s.isNotEmpty)
+        .join(' ');
+    if (mounted) {
+      context.push('/scan/3d', extra: name.isNotEmpty ? name : null);
     }
   }
 
@@ -1307,36 +1316,65 @@ class _LiveScanScreenState extends State<LiveScanScreen>
     return count;
   }
 
+  // ── Slot reel candidates for each field ─────────────────────────────
+  static const _brandCandidates = [
+    'Oticon', 'Phonak', 'Signia', 'Widex', 'ReSound', 'Starkey',
+    'Unitron', 'Bernafon', 'Beltone', 'Jabra', 'Philips',
+  ];
+  static const _modelCandidates = [
+    'Real', 'More', 'Intent', 'Audéo', 'Lumity', 'Paradise',
+    'Pure', 'Styletto', 'Moment', 'Nexia', 'Omnia', 'Genesis',
+    'Moxi', 'Vivante', 'Evolv', 'Silk', 'Alpha',
+  ];
+  static const _styleCandidates = [
+    'BTE', 'RIC', 'ITE', 'CIC', 'ITC', 'IIC',
+  ];
+  static const _tubingCandidates = ['Standard', 'Slim', 'None'];
+  static const _powerCandidates = ['Battery', 'Rechargeable'];
+  static const _batteryCandidates = [
+    'Size 10', 'Size 13', 'Size 312', 'Size 675', 'Rechargeable',
+  ];
+  static const _colourCandidates = [
+    'Beige', 'Tan', 'Silver', 'Black', 'Brown',
+    'Espresso', 'Champagne', 'Chestnut', 'Rose Gold', 'Graphite',
+  ];
+
   /// Build the 7 HudField entries for the ScanHud widget.
   List<HudField> _buildHudFields() => [
         HudField(
           label: 'MAKE',
           value: _detectedBrand,
           confidence: _brandConfidence,
+          slotCandidates: _brandCandidates,
         ),
         HudField(
           label: 'MODEL',
           value: _detectedModel,
+          slotCandidates: _modelCandidates,
         ),
         HudField(
           label: 'STYLE',
           value: _detectedStyle,
           confidence: _detectedStyle != null ? 'CATALOG' : null,
+          slotCandidates: _styleCandidates,
         ),
         HudField(
           label: 'TUBING',
           value: _detectedTubing,
           confidence: _detectedTubing != null ? 'INFERRED' : null,
+          slotCandidates: _tubingCandidates,
         ),
         HudField(
           label: 'POWER',
           value: _detectedPower,
           confidence: _detectedPower != null ? 'CATALOG' : null,
+          slotCandidates: _powerCandidates,
         ),
         HudField(
           label: 'BAT SIZE',
           value: _detectedBatterySize,
           confidence: _detectedBatterySize != null ? 'CATALOG' : null,
+          slotCandidates: _batteryCandidates,
         ),
         HudField(
           label: 'COLOUR',
@@ -1345,6 +1383,7 @@ class _LiveScanScreenState extends State<LiveScanScreen>
           colourConfidence: _colourConfidence,
           colourConfirmed: _colourConfirmed,
           onTap: _colourConfirmed ? _showColourPicker : null,
+          slotCandidates: _colourCandidates,
         ),
       ];
 

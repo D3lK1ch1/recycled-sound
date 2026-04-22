@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_typography.dart';
+import 'slot_reel_text.dart';
 
 /// A single field in the 7-field HUD.
 class HudField {
@@ -13,6 +14,7 @@ class HudField {
     this.colourConfidence = 0.0,
     this.colourConfirmed = false,
     this.onTap,
+    this.slotCandidates = const [],
   });
 
   /// Field label shown on the left, e.g. "MAKE", "STYLE".
@@ -35,6 +37,9 @@ class HudField {
 
   /// Called when the user taps this field (e.g. colour picker).
   final VoidCallback? onTap;
+
+  /// Values to cycle through in the slot reel animation.
+  final List<String> slotCandidates;
 
   bool get isDetected => value != null && value!.isNotEmpty;
 }
@@ -278,20 +283,26 @@ class _FieldRow extends StatelessWidget {
               const SizedBox(width: 6),
             ],
 
-            // Value or placeholder
+            // Value — slot reel when candidates available, static otherwise
             Expanded(
-              child: Text(
-                detected ? field.value! : '· · ·',
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  fontWeight: detected ? FontWeight.w600 : FontWeight.w400,
-                  color: detected
-                      ? AppColors.success
-                      : const Color(0x33FFFFFF),
-                  letterSpacing: 0.3,
-                ),
-              ),
+              child: field.slotCandidates.isNotEmpty
+                  ? SlotReelText(
+                      candidates: field.slotCandidates,
+                      targetValue: field.value,
+                    )
+                  : Text(
+                      detected ? field.value! : '· · ·',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        fontWeight:
+                            detected ? FontWeight.w600 : FontWeight.w400,
+                        color: detected
+                            ? AppColors.success
+                            : const Color(0x33FFFFFF),
+                        letterSpacing: 0.3,
+                      ),
+                    ),
             ),
 
             // Confidence badge
