@@ -69,11 +69,11 @@ class CaptureAnimatorOverlay extends StatelessWidget {
         for (final anim in animations)
           _CaptureSequence(key: ValueKey(anim.id), animation: anim),
 
-        // Thumbnail dock row (bottom-right)
+        // Thumbnail dock row (bottom-right, above HUD + button)
         if (dockedThumbnails.isNotEmpty)
           Positioned(
             right: 12,
-            bottom: 140, // above the HUD + capture controls
+            bottom: 240, // above the HUD + Review button + capture controls
             child: _ThumbnailDock(thumbnails: dockedThumbnails),
           ),
       ],
