@@ -273,11 +273,19 @@ class _LiveScanScreenState extends State<LiveScanScreen>
   }
 
   /// Grab a quick snapshot for the thumbnail dock without pausing the stream.
+  ///
+  /// PROFILING NOTE: this method stops the image stream, calls takePicture()
+  /// (which can take 200-1500ms on iOS while the camera reconfigures for a
+  /// full-res capture), then restarts the stream. Every period of this is
+  /// frames OCR doesn't see. The pauseMs log line measures the wallclock
+  /// hole — feeds the detection-throughput-sacred analysis.
   Future<void> _takePeriodicSnapshot() async {
     if (_isCapturing || _cameraController == null) return;
     if (!_cameraController!.value.isInitialized) return;
     _isCapturing = true;
 
+    final Stopwatch? pauseWatch =
+        kDebugMode ? (Stopwatch()..start()) : null;
     try {
       await _cameraController!.stopImageStream();
       final xFile = await _cameraController!.takePicture();
@@ -306,6 +314,10 @@ class _LiveScanScreenState extends State<LiveScanScreen>
       }
     } finally {
       _isCapturing = false;
+      if (pauseWatch != null) {
+        _log('PROFILE periodic-snapshot pauseMs=${pauseWatch.elapsedMilliseconds} '
+            '(stream blocked → frames lost during this window)');
+      }
     }
   }
 
@@ -393,12 +405,22 @@ class _LiveScanScreenState extends State<LiveScanScreen>
   }
 
   Future<void> _processFrame(CameraImage image) async {
+    // ── Stage timing instrumentation (debug only) ─────────────────────
+    // We need stage-relative cost on the same frame to diagnose the
+    // 15-second detection latency. Log every 30 frames matches the
+    // existing throttle cadence used by brand/model match logging.
+    final Stopwatch? totalWatch =
+        kDebugMode ? (Stopwatch()..start()) : null;
+    int colourUs = 0, prepUs = 0, ocrUs = 0, matchUs = 0, stateUs = 0;
+    int ocrBlocks = 0;
     try {
       // Colour sampling — runs on raw bytes, sub-millisecond.
       // Gated: only starts once ML Kit has found at least one text block,
       // which means something interesting (a hearing aid) is in frame.
       // Without this gate, the stabiliser locks onto desk/skin/background
       // colours before the device is even positioned.
+      final Stopwatch? colourWatch =
+          kDebugMode ? (Stopwatch()..start()) : null;
       if (Platform.isIOS &&
           image.planes.isNotEmpty &&
           !_colourConfirmed &&
@@ -412,6 +434,7 @@ class _LiveScanScreenState extends State<LiveScanScreen>
         final match = ColourClassifier.classify(sampled);
         _colourStabiliser.push(match.name, match.reference);
       }
+      colourUs = colourWatch?.elapsedMicroseconds ?? 0;
 
       // Edge detection disabled — was interfering with OCR frame budget.
       // TODO: move to background isolate before re-enabling.
@@ -434,19 +457,20 @@ class _LiveScanScreenState extends State<LiveScanScreen>
         _activeFilter = _activeFilter.next;
       }
 
-      final Stopwatch? filterWatch =
+      final Stopwatch? prepWatch =
           kDebugMode ? (Stopwatch()..start()) : null;
       final inputImage = _buildInputImage(image, applyFilter: true);
-      if (filterWatch != null && _frameCount % 100 == 0) {
-        _log('frame prep (${_activeFilter.label}): '
-            '${filterWatch.elapsedMicroseconds}µs');
-      }
+      prepUs = prepWatch?.elapsedMicroseconds ?? 0;
       if (inputImage == null) {
         _log('_buildInputImage returned null — frame skipped');
         return;
       }
 
+      final Stopwatch? ocrWatch =
+          kDebugMode ? (Stopwatch()..start()) : null;
       final recognizedText = await _textRecognizer.processImage(inputImage);
+      ocrUs = ocrWatch?.elapsedMicroseconds ?? 0;
+      ocrBlocks = recognizedText.blocks.length;
       if (_disposed || !mounted) return;
 
       // Update live scan status for user feedback
@@ -474,6 +498,8 @@ class _LiveScanScreenState extends State<LiveScanScreen>
       }
 
       final detections = <TextDetection>[];
+      final Stopwatch? matchWatch =
+          kDebugMode ? (Stopwatch()..start()) : null;
 
       for (final block in recognizedText.blocks) {
         for (final line in block.lines) {
@@ -651,6 +677,10 @@ class _LiveScanScreenState extends State<LiveScanScreen>
         }
       }
 
+      matchUs = matchWatch?.elapsedMicroseconds ?? 0;
+
+      final Stopwatch? stateWatch =
+          kDebugMode ? (Stopwatch()..start()) : null;
       setState(() {
         _liveDetections = detections;
         _imageSize = Size(
@@ -683,8 +713,26 @@ class _LiveScanScreenState extends State<LiveScanScreen>
           }
         }
       });
+      stateUs = stateWatch?.elapsedMicroseconds ?? 0;
     } catch (e, st) {
       _log('_processFrame error: $e\n$st');
+    } finally {
+      // Consolidated stage timing — every 30 frames matches existing
+      // brand-match log throttle, so we get correlated context in logs.
+      // Format: total | colour | prep | ocr(N blocks) | match | state
+      // The OCR call is the suspected dominant cost; ocrBlocks=0 lets us
+      // distinguish empty-frame cost from populated-frame cost.
+      if (totalWatch != null && _frameCount % 30 == 0) {
+        final totalMs = (totalWatch.elapsedMicroseconds / 1000).toStringAsFixed(1);
+        _log('PROFILE frame=$_frameCount '
+            'total=${totalMs}ms '
+            'colour=$colourUsµs '
+            'prep=$prepUsµs '
+            'ocr=$ocrUsµs(blocks=$ocrBlocks) '
+            'match=$matchUsµs '
+            'state=$stateUsµs '
+            'filter=${_activeFilter.label}');
+      }
     }
   }
 
