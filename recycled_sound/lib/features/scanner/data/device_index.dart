@@ -219,6 +219,26 @@ class DeviceIndex {
     // Don't re-narrow a field to the same value
     if (_locked[field]?.value == value) return state;
 
+    // Override guard: stops the "right answer then noisy override" flapping
+    // observed live on 2026-05-07. If the field is already locked, require
+    // strictly stronger evidence to flip it. Manual overrides always win.
+    // Logged in debug builds so we can see in the console how often the
+    // guard fires — every rejection is a signal the noise model is real.
+    final existing = _locked[field];
+    if (existing != null && source != DetectionSource.manual) {
+      final existingRank = _confidenceRank(existing.confidence);
+      final newRank = _confidenceRank(confidence);
+      if (newRank <= existingRank) {
+        if (kDebugMode) {
+          debugPrint('DeviceIndex: REJECT override on ${field.name} — '
+              'kept "${existing.value}" (${existing.confidence}, '
+              'rank=$existingRank) over incoming "$value" '
+              '($confidence, rank=$newRank)');
+        }
+        return state;
+      }
+    }
+
     final normalized = value.toLowerCase().trim();
     final index = _indexForField(field);
 
@@ -268,6 +288,34 @@ class DeviceIndex {
 
     _emitState();
     return state;
+  }
+
+  /// Numeric confidence rank used by the override guard. Higher beats
+  /// lower. Unknown labels fall back to a low rank so the guard fails
+  /// permissively rather than getting permanently stuck.
+  ///
+  /// Tiering:
+  ///   HIGH ocr exact     80   — multi-pattern OCR hit, strongest signal
+  ///   FROM MODEL         70   — model→brand cross-ref, very high signal
+  ///   CATALOG cascade    60   — derived from a locked field, authoritative
+  ///   INFERRED           50   — auto-locked singleton after narrowing
+  ///   MEDIUM ocr         40   — single-pattern OCR hit
+  ///   NEURAL net         30   — visual classifier, can be wrong on bg
+  ///   OCR (no label)     20   — raw OCR text, no pattern confidence
+  ///   LOW ocr            15   — fuzzy match, often noise
+  ///   unknown            10   — fail-open default
+  static int _confidenceRank(String? confidence) {
+    if (confidence == null) return 10;
+    final c = confidence.toUpperCase();
+    if (c.contains('HIGH')) return 80;
+    if (c.contains('FROM MODEL')) return 70;
+    if (c.contains('CATALOG')) return 60;
+    if (c.contains('INFERRED')) return 50;
+    if (c.contains('MEDIUM')) return 40;
+    if (c.contains('NEURAL')) return 30;
+    if (c.contains('LOW')) return 15;
+    if (c.contains('OCR')) return 20;
+    return 10;
   }
 
   /// Possible values for [field] across remaining candidates.
