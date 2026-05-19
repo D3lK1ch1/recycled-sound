@@ -1,4 +1,58 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+/// QA gate state for a hearing aid. The set is closed: stringly-typing it
+/// would let a typo silently fall through the chip-variant switch.
+enum QaStatus {
+  pendingQa('pending_qa'),
+  passed('passed'),
+  failed('failed');
+
+  const QaStatus(this.wire);
+
+  /// The on-the-wire string value persisted in Firestore.
+  final String wire;
+
+  /// Parse the wire form; defaults to [pendingQa] for unknown/empty input
+  /// (handles legacy docs and forward-compat with new variants).
+  static QaStatus fromWire(String? s) => switch (s) {
+        'passed' => passed,
+        'failed' => failed,
+        _ => pendingQa,
+      };
+}
+
+/// Lifecycle status for a hearing aid in the redistribution pipeline.
+enum DeviceStatus {
+  donated('donated'),
+  reprogramming('reprogramming'),
+  servicing('servicing'),
+  ready('ready'),
+  matched('matched'),
+  shipped('shipped'),
+  delivered('delivered'),
+  active('active');
+
+  const DeviceStatus(this.wire);
+
+  final String wire;
+
+  static DeviceStatus fromWire(String? s) => switch (s) {
+        'reprogramming' => reprogramming,
+        'servicing' => servicing,
+        'ready' => ready,
+        'matched' => matched,
+        'shipped' => shipped,
+        'delivered' => delivered,
+        'active' => active,
+        _ => donated,
+      };
+}
+
 /// 26-field device model matching the Recycled Sound device register.
+///
+/// Persisted in two Firestore collections with identical shape:
+/// - `incoming/{id}` — scanner write-target, pre-triage
+/// - `devices/{id}` — audiologist-curated register, post-triage
 class Device {
   const Device({
     required this.id,
@@ -22,8 +76,8 @@ class Device {
     this.chargerType = '',
     this.accessories = const [],
     this.condition = '',
-    this.qaStatus = 'pending_qa',
-    this.status = 'donated',
+    this.qaStatus = QaStatus.pendingQa,
+    this.status = DeviceStatus.donated,
     this.servicingNotes = '',
     this.servicingCost = 0,
     this.donorId = '',
@@ -54,8 +108,8 @@ class Device {
   final String chargerType;
   final List<String> accessories;
   final String condition;
-  final String qaStatus;
-  final String status;
+  final QaStatus qaStatus;
+  final DeviceStatus status;
   final String servicingNotes;
   final double servicingCost;
   final String donorId;
@@ -63,6 +117,91 @@ class Device {
   final List<String> photos;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+
+  /// Build a [Device] from a Firestore document snapshot.
+  ///
+  /// The document `id` is taken from the snapshot, not from a `id` field
+  /// in the data — Firestore document IDs are the canonical identifier.
+  factory Device.fromFirestore(DocumentSnapshot<Map<String, dynamic>> snap) {
+    final d = snap.data() ?? const <String, dynamic>{};
+    DateTime? ts(dynamic v) => v is Timestamp ? v.toDate() : null;
+    return Device(
+      id: snap.id,
+      brand: (d['brand'] as String?) ?? '',
+      model: (d['model'] as String?) ?? '',
+      type: (d['type'] as String?) ?? '',
+      year: (d['year'] as String?) ?? '',
+      serialLeft: (d['serialLeft'] as String?) ?? '',
+      serialRight: (d['serialRight'] as String?) ?? '',
+      batterySize: (d['batterySize'] as String?) ?? '',
+      domeType: (d['domeType'] as String?) ?? '',
+      waxFilter: (d['waxFilter'] as String?) ?? '',
+      receiver: (d['receiver'] as String?) ?? '',
+      programmingInterface: (d['programmingInterface'] as String?) ?? '',
+      techLevel: (d['techLevel'] as String?) ?? '',
+      gainRange: (d['gainRange'] as String?) ?? '',
+      fittingRange: (d['fittingRange'] as String?) ?? '',
+      remoteFT: (d['remoteFT'] as bool?) ?? false,
+      appCompatible: (d['appCompatible'] as bool?) ?? false,
+      auracast: (d['auracast'] as bool?) ?? false,
+      chargerType: (d['chargerType'] as String?) ?? '',
+      accessories:
+          ((d['accessories'] as List?)?.cast<String>()) ?? const <String>[],
+      condition: (d['condition'] as String?) ?? '',
+      qaStatus: QaStatus.fromWire(d['qaStatus'] as String?),
+      status: DeviceStatus.fromWire(d['status'] as String?),
+      servicingNotes: (d['servicingNotes'] as String?) ?? '',
+      servicingCost: ((d['servicingCost'] as num?) ?? 0).toDouble(),
+      donorId: (d['donorId'] as String?) ?? '',
+      scanId: (d['scanId'] as String?) ?? '',
+      photos: ((d['photos'] as List?)?.cast<String>()) ?? const <String>[],
+      createdAt: ts(d['createdAt']),
+      updatedAt: ts(d['updatedAt']),
+    );
+  }
+
+  /// Serialize for Firestore. Excludes [id] (lives in the doc key) and uses
+  /// [FieldValue.serverTimestamp] for `createdAt`/`updatedAt` when null —
+  /// callers that update existing docs should pass the existing values.
+  ///
+  /// [createdBy] is required: the `incoming/` rules pin
+  /// `request.resource.data.createdBy == auth.uid` on create, and a missing
+  /// value would silently fail at the rules layer with a permission-denied
+  /// rather than a compile error.
+  Map<String, dynamic> toFirestore({required String createdBy}) => {
+        'brand': brand,
+        'model': model,
+        'type': type,
+        'year': year,
+        'serialLeft': serialLeft,
+        'serialRight': serialRight,
+        'batterySize': batterySize,
+        'domeType': domeType,
+        'waxFilter': waxFilter,
+        'receiver': receiver,
+        'programmingInterface': programmingInterface,
+        'techLevel': techLevel,
+        'gainRange': gainRange,
+        'fittingRange': fittingRange,
+        'remoteFT': remoteFT,
+        'appCompatible': appCompatible,
+        'auracast': auracast,
+        'chargerType': chargerType,
+        'accessories': accessories,
+        'condition': condition,
+        'qaStatus': qaStatus.wire,
+        'status': status.wire,
+        'servicingNotes': servicingNotes,
+        'servicingCost': servicingCost,
+        'donorId': donorId,
+        'scanId': scanId,
+        'photos': photos,
+        'createdBy': createdBy,
+        'createdAt': createdAt == null
+            ? FieldValue.serverTimestamp()
+            : Timestamp.fromDate(createdAt!),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
 
   /// Sample devices from the existing register for MVP display.
   static List<Device> mockDevices() => [
@@ -73,8 +212,8 @@ class Device {
           type: 'RIC',
           year: '2021',
           batterySize: '312',
-          qaStatus: 'passed',
-          status: 'ready',
+          qaStatus: QaStatus.passed,
+          status: DeviceStatus.ready,
         ),
         const Device(
           id: '2',
@@ -83,8 +222,8 @@ class Device {
           type: 'BTE',
           year: '2022',
           batterySize: '13',
-          qaStatus: 'pending_qa',
-          status: 'donated',
+          qaStatus: QaStatus.pendingQa,
+          status: DeviceStatus.donated,
         ),
         const Device(
           id: '3',
@@ -93,8 +232,8 @@ class Device {
           type: 'RIC',
           year: '2020',
           batterySize: '312',
-          qaStatus: 'passed',
-          status: 'matched',
+          qaStatus: QaStatus.passed,
+          status: DeviceStatus.matched,
         ),
         const Device(
           id: '4',
@@ -103,8 +242,8 @@ class Device {
           type: 'RIC',
           year: '2023',
           batterySize: 'Rechargeable',
-          qaStatus: 'pending_qa',
-          status: 'donated',
+          qaStatus: QaStatus.pendingQa,
+          status: DeviceStatus.donated,
         ),
         const Device(
           id: '5',
@@ -113,8 +252,8 @@ class Device {
           type: 'RIC',
           year: '2021',
           batterySize: '10',
-          qaStatus: 'failed',
-          status: 'servicing',
+          qaStatus: QaStatus.failed,
+          status: DeviceStatus.servicing,
         ),
       ];
 }
