@@ -78,12 +78,12 @@ jobs:
             echo "compare_branch=HEAD~1" >> $GITHUB_OUTPUT
             fi
 
-      - name: Check coverage threshold
+      - name: Check differential coverage
         if: steps.docs-check.outputs.skip != 'true'
         working-directory: recycled_sound
         run: |
           pip install diff-cover
-          diff-cover coverage/lcov.info\
+          diff-cover coverage/lcov.info \
             --compare-branch ${{ steps.compare.outputs.compare_branch }} \
             --fail-under 80 \
             --show-uncovered
