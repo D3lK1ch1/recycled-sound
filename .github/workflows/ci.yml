@@ -12,6 +12,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for git diff to work
 
       # Skip Flutter+Functions CI for infra-only changes — paths that
       # CANNOT affect Dart coverage or Cloud Functions build. Lets PRs
@@ -65,29 +67,26 @@ jobs:
         if: steps.docs-check.outputs.skip != 'true'
         working-directory: recycled_sound
         run: flutter test --coverage
+        
+      - name: Set compare branch
+        if: steps.docs-check.outputs.skip != 'true'
+        id: compare
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "compare_branch=origin/${{ github.event.pull_request.base.ref }}" >> $GITHUB_OUTPUT
+          else
+            echo "compare_branch=HEAD~1" >> $GITHUB_OUTPUT
+            fi
 
       - name: Check coverage threshold
         if: steps.docs-check.outputs.skip != 'true'
         working-directory: recycled_sound
         run: |
-          if [ ! -f coverage/lcov.info ]; then
-            echo "No coverage file found"
-            exit 1
-          fi
-          # Parse lcov.info for line coverage
-          LINES_HIT=$(grep -c 'DA:' coverage/lcov.info || echo 0)
-          LINES_FOUND=$(grep 'DA:' coverage/lcov.info | wc -l || echo 0)
-          LINES_COVERED=$(grep 'DA:' coverage/lcov.info | grep -v ',0$' | wc -l || echo 0)
-          if [ "$LINES_FOUND" -eq 0 ]; then
-            echo "No lines found in coverage report"
-            exit 0
-          fi
-          COVERAGE=$((LINES_COVERED * 100 / LINES_FOUND))
-          echo "Coverage: ${COVERAGE}% (${LINES_COVERED}/${LINES_FOUND} lines)"
-          if [ "$COVERAGE" -lt 80 ]; then
-            echo "Coverage ${COVERAGE}% is below threshold of 80%"
-            exit 1
-          fi
+          pip install diff-cover
+          diff-cover coverage/lcov.info\
+            --compare-branch ${{ steps.compare.outputs.compare_branch }} \
+            --fail-under 80 \
+            --show-uncovered
 
       # Cloud Functions build check
       - uses: actions/setup-node@v4
