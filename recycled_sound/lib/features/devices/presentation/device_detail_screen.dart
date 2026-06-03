@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/rs_card.dart';
@@ -55,6 +56,10 @@ class _DetailView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text('${device.brand} ${device.model}'),
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => context.go('/'),
+        ),
         actions: [
           RsChip(
             label: device.qaStatus.wire.replaceAll('_', ' ').toUpperCase(),
