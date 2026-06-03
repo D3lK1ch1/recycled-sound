@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # needed for git diff to work
+          fetch-depth: 2  # HEAD and HEAD~1 — enough for git diff
 
       # Skip Flutter+Functions CI for infra-only changes — paths that
       # CANNOT affect Dart coverage or Cloud Functions build. Lets PRs
@@ -76,15 +76,22 @@ jobs:
             echo "compare_branch=origin/${{ github.event.pull_request.base.ref }}" >> $GITHUB_OUTPUT
           else
             echo "compare_branch=HEAD~1" >> $GITHUB_OUTPUT
-            fi
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.docs-check.outputs.skip != 'true'
+        with:
+          python-version: '3.12'
+          cache: pip
 
       - name: Check differential coverage
         if: steps.docs-check.outputs.skip != 'true'
         working-directory: recycled_sound
         run: |
-          pip install diff-cover
+          pipx install 'diff-cover==9.6.0'
           diff-cover coverage/lcov.info \
             --compare-branch ${{ steps.compare.outputs.compare_branch }} \
+            --src-roots . \
             --fail-under 80 \
             --show-uncovered
 
