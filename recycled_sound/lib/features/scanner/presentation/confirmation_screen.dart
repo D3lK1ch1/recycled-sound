@@ -17,7 +17,7 @@ import '../data/brand_colour_palettes.dart';
 import '../data/colour_classifier.dart';
 import '../data/models/scan_result.dart';
 import '../providers/scanner_providers.dart';
-import '../../auth_providers.dart';
+import '../../auth/providers/auth_providers.dart';
 
 /// The 7-field confirmation screen — where AI meets audiologist.
 ///
@@ -255,8 +255,8 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen>
       await scanner.submitCorrections(
         scanId: result.scanId,
         corrections: corrections,
-        userId: ref.read(firebaseAuthProvider)?.currentUser?.uid ?? '',
-        userRole: ref.read(firebaseUserRoleProvider) ?? 'volunteer',
+        userId: ref.read(firebaseAuthProvider).currentUser?.uid ?? '',
+        userRole: ref.read(currentUserProfileProvider) ?? 'volunteer',
       );
 
       router.go('/devices');
