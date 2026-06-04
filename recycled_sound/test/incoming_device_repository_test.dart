@@ -249,9 +249,12 @@ void main() {
 
       // Each upload contributes one URI in order, indexed by position.
       expect(photos, hasLength(4));
-      expect(photos[1], 'gs://some-bucket/gs://some-bucketincoming/$id/photos/0.jpg');
-      expect(photos[2], 'gs://some-bucket/gs://some-bucketincoming/$id/photos/1.jpg');
-      expect(photos[3], 'gs://some-bucket/gs://some-bucketincoming/$id/photos/2.jpg');
+      expect(photos[1],
+          'gs://some-bucket/gs://some-bucketscans/user-abc/incoming/$id/0.jpg');
+      expect(photos[2],
+          'gs://some-bucket/gs://some-bucketscans/user-abc/incoming/$id/1.jpg');
+      expect(photos[3],
+          'gs://some-bucket/gs://some-bucketscans/user-abc/incoming/$id/2.jpg');
 
       // And the files actually landed in the mock store — proves we're
       // testing real putFile traffic, not a no-op codepath.
@@ -259,9 +262,9 @@ void main() {
       expect(
         storage.storedFilesMap.keys,
         containsAll([
-          'incoming/$id/photos/0.jpg',
-          'incoming/$id/photos/1.jpg',
-          'incoming/$id/photos/2.jpg',
+          'scans/user-abc/incoming/$id/0.jpg',
+          'scans/user-abc/incoming/$id/1.jpg',
+          'scans/user-abc/incoming/$id/2.jpg',
         ]),
       );
     });
