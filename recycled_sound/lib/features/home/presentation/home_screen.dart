@@ -66,7 +66,7 @@ class HomeScreen extends StatelessWidget {
                     RsButton(
                       label: 'Scan to identify',
                       icon: Icons.center_focus_strong,
-                      onPressed: () => context.push('/scan'),
+                      onPressed: () => context.go('/scan'),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -141,7 +141,7 @@ class HomeScreen extends StatelessWidget {
                 icon: Icons.assignment_turned_in,
                 title: '7-Field Confirmation',
                 subtitle: 'Preview with mock scan data',
-                onTap: () => context.push('/scan/confirm'),
+                onTap: () => context.go('/scan/confirm'),
               ),
             ],
           ),
