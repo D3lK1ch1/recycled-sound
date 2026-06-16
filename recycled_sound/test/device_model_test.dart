@@ -103,7 +103,7 @@ void main() {
         model: 'More 1',
         type: 'BTE',
         batterySize: '13',
-        needsInputFields: ['tubing'],
+        needsInputFields: [ClinicalField.tubing],
       );
       final map = d.toFirestore(createdBy: 'user-1');
 
@@ -193,7 +193,7 @@ void main() {
         id: 'x',
         brand: 'Phonak',
         model: 'P90',
-        needsInputFields: ['tubing', 'colour'],
+        needsInputFields: [ClinicalField.tubing, ClinicalField.colour],
       );
       expect(d.unknownFieldCount, 2);
     });
@@ -313,6 +313,35 @@ void main() {
         expect(back.powerSource, PowerSource.battery);
         expect(back.colour, 'Graphite');
         expect(back.location, 'C10');
+      },
+    );
+
+    test(
+      'needsInputFields with an unrecognised key is retained, blocks promotion, '
+      'and round-trips losslessly (fail-closed; PR #86 cage-match)',
+      () async {
+        await firestore.collection('incoming').doc('mixed').set({
+          'brand': 'Phonak',
+          'model': 'P90',
+          'needsInputFields': ['colour', 'make'], // one real, one garbage key
+        });
+        final snap = await firestore.collection('incoming').doc('mixed').get();
+        final d = Device.fromFirestore(snap);
+
+        // Recognised key is typed; the unknown one is RETAINED, not dropped.
+        expect(d.needsInputFields, [ClinicalField.colour]);
+        expect(d.unrecognisedNeedsInput, ['make']);
+        expect(d.unknownFieldCount, 2);
+
+        // The gate fails CLOSED — an un-nameable blocker still blocks.
+        final verdict = d.reviewForPromotion();
+        expect(verdict, isA<NeedsResolution>());
+        expect((verdict as NeedsResolution).unrecognised, ['make']);
+
+        // A tolerant read followed by a write must not silently destroy the
+        // unknown blocker.
+        expect(d.toFirestore(createdBy: 'u')['needsInputFields'],
+            ['colour', 'make']);
       },
     );
 
