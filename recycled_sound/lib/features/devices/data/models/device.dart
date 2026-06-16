@@ -52,6 +52,120 @@ enum DeviceStatus {
   };
 }
 
+/// Style — Seray's clinical field 3 (BTE/RIC/ITE/CIC/ITC/IIC). Closed set;
+/// human-confirmed (the scanner's CLIP probe pre-fills it, but it is not an
+/// authoritative read). [unspecified] is the "not yet determined" state and
+/// serializes to the empty string, preserving the model's empty-default
+/// convention — and absorbing the legacy `'Unknown'` provenance flag, which was
+/// never a real Style value (the "needs input" signal lives in
+/// [Device.needsInputFields], not in this value. See feedback_provenance_not_value).
+///
+/// Wire format is UNCHANGED — these are the exact strings already persisted in
+/// Firestore and matched (as catalog strings) by the scanner's elimination tree,
+/// so existing `incoming/`/`devices/` docs and the `devices/` rules' value↔flag
+/// consistency check round-trip untouched.
+enum Style {
+  unspecified(''),
+  bte('BTE'),
+  ric('RIC'),
+  ite('ITE'),
+  cic('CIC'),
+  itc('ITC'),
+  iic('IIC');
+
+  const Style(this.wire);
+
+  /// The on-the-wire string persisted in Firestore (`'BTE'`/`'RIC'`/…), unchanged
+  /// from the legacy free-text field.
+  final String wire;
+
+  /// Parse the wire form; any unrecognized/empty/legacy value (including the
+  /// `'Unknown'` provenance sentinel) falls back to [unspecified]. Never throws.
+  ///
+  /// **Case- and whitespace-tolerant (auto-healing).** The input is trimmed and
+  /// upper-cased before matching, so a legacy free-text variant like `'ric'`,
+  /// `'Ric'`, or `' BTE '` recovers to its canonical enum instead of collapsing
+  /// to [unspecified] and being blanked on the next save (Kelvin, PR #90
+  /// cage-match: "do not freeze the patient to cure the fever"). Output is
+  /// unchanged — [wire] always emits the canonical upper-case string — so the
+  /// `devices/` rules contract round-trips untouched while legacy casing heals.
+  static Style fromWire(String? s) => switch (s?.trim().toUpperCase()) {
+    'BTE' => bte,
+    'RIC' => ric,
+    'ITE' => ite,
+    'CIC' => cic,
+    'ITC' => itc,
+    'IIC' => iic,
+    _ => unspecified,
+  };
+
+  /// Audiologist-facing display string. The wire abbreviation IS the label for
+  /// real values (they're standard clinical abbreviations); [unspecified] shows
+  /// as `'—'`. Single source of truth so display sites don't each re-derive the
+  /// `== unspecified ? '—' : wire` ternary (Kelvin, PR #90 cage-match).
+  String get label => this == unspecified ? '—' : wire;
+}
+
+/// Battery size — Seray's clinical field 6 (10/13/312/675/Rechargeable). Closed
+/// set; human-confirmed. [unspecified] serializes to the empty string (same
+/// empty-default convention as [Style]/[Tubing]) and absorbs the `'Unknown'`
+/// provenance flag.
+///
+/// **`Rechargeable` overlaps [PowerSource] deliberately.** A rechargeable device
+/// has no disposable cell, so its "battery size" IS `Rechargeable` — the register
+/// stores it on this field exactly as the existing free-text data and the
+/// `mockDevices()` fixtures did (`batterySize: 'Rechargeable'`). The two fields
+/// are not derived from each other (no cross-field invariant is enforced here);
+/// each is confirmed independently by the audiologist, matching the legacy shape.
+///
+/// Wire format is UNCHANGED — the exact strings already persisted, so the
+/// `devices/` rules' emptiness/sentinel check round-trips untouched.
+enum BatterySize {
+  unspecified(''),
+  size10('10'),
+  size13('13'),
+  size312('312'),
+  size675('675'),
+  rechargeable('Rechargeable');
+
+  const BatterySize(this.wire);
+
+  /// The on-the-wire string persisted in Firestore (`'10'`/`'312'`/`'Rechargeable'`
+  /// /…), unchanged from the legacy free-text field.
+  final String wire;
+
+  /// Parse the wire form; any unrecognized/empty/legacy value (including the
+  /// `'Unknown'` provenance sentinel) falls back to [unspecified]. Never throws.
+  ///
+  /// `'N/A'` maps to [rechargeable]: it is the confirm screen's established
+  /// sentinel for "rechargeable device, no disposable cell" — set ONLY on the
+  /// Power=Rechargeable branch (confirmation_screen `_ChipSelectorField`), so
+  /// `N/A` battery ≡ rechargeable. Translating it here (rather than blanking it
+  /// to [unspecified]) keeps a rechargeable scan persisting the canonical
+  /// `'Rechargeable'` wire string — the unchanged wire contract — instead of
+  /// silently emptying the field on save (Carnot, PR #90 cage-match).
+  ///
+  /// **Case- and whitespace-tolerant (auto-healing).** Input is trimmed and
+  /// upper-cased before matching, so a legacy `'rechargeable'` / `'N/A'` / a
+  /// padded `' 312 '` recovers to its canonical enum rather than collapsing to
+  /// [unspecified] and being blanked on save (Kelvin, PR #90). The numeric
+  /// values are unaffected by case-folding; [wire] still emits the canonical
+  /// mixed-case `'Rechargeable'` so the rules contract round-trips untouched.
+  static BatterySize fromWire(String? s) => switch (s?.trim().toUpperCase()) {
+    '10' => size10,
+    '13' => size13,
+    '312' => size312,
+    '675' => size675,
+    'RECHARGEABLE' || 'N/A' => rechargeable,
+    _ => unspecified,
+  };
+
+  /// Audiologist-facing display string. The wire value IS the label for real
+  /// values; [unspecified] shows as `'—'`. Single source of truth (Kelvin,
+  /// PR #90 cage-match).
+  String get label => this == unspecified ? '—' : wire;
+}
+
 /// Tubing type — Seray's clinical field 4. Closed set; human-determined at
 /// confirm time. [unspecified] is the "not yet determined" state and serializes
 /// to the empty string, preserving the model's empty-default convention (and
@@ -121,11 +235,11 @@ class DraftDevice {
   const DraftDevice({
     required this.brand,
     required this.model,
-    this.type = '',
+    this.type = Style.unspecified,
     this.year = '',
     this.serialLeft = '',
     this.serialRight = '',
-    this.batterySize = '',
+    this.batterySize = BatterySize.unspecified,
     this.tubing = Tubing.unspecified,
     this.powerSource = PowerSource.unspecified,
     this.colour = '',
@@ -155,11 +269,18 @@ class DraftDevice {
 
   final String brand;
   final String model;
-  final String type;
+
+  /// Style — Seray's clinical field 3. Closed set; [Style.unspecified] until
+  /// confirmed.
+  final Style type;
+
   final String year;
   final String serialLeft;
   final String serialRight;
-  final String batterySize;
+
+  /// Battery size — Seray's clinical field 6. Closed set;
+  /// [BatterySize.unspecified] until confirmed.
+  final BatterySize batterySize;
 
   /// Tubing type — Seray's clinical field 4. Human-determined at confirm time;
   /// [Tubing.unspecified] until acknowledged.
@@ -255,11 +376,11 @@ class Device {
     required this.id,
     required this.brand,
     required this.model,
-    this.type = '',
+    this.type = Style.unspecified,
     this.year = '',
     this.serialLeft = '',
     this.serialRight = '',
-    this.batterySize = '',
+    this.batterySize = BatterySize.unspecified,
     this.tubing = Tubing.unspecified,
     this.powerSource = PowerSource.unspecified,
     this.colour = '',
@@ -294,11 +415,17 @@ class Device {
   final String id;
   final String brand;
   final String model;
-  final String type;
+
+  /// Style — Seray's clinical field 3 (BTE/RIC/ITE/CIC/ITC/IIC). Human-confirmed.
+  final Style type;
+
   final String year;
   final String serialLeft;
   final String serialRight;
-  final String batterySize;
+
+  /// Battery size — Seray's clinical field 6 (10/13/312/675/Rechargeable).
+  /// Human-confirmed.
+  final BatterySize batterySize;
 
   /// Tubing type — Seray's clinical field 4. Human-determined.
   final Tubing tubing;
@@ -381,11 +508,11 @@ class Device {
       id: snap.id,
       brand: (d['brand'] as String?) ?? '',
       model: (d['model'] as String?) ?? '',
-      type: (d['type'] as String?) ?? '',
+      type: Style.fromWire(d['type'] as String?),
       year: (d['year'] as String?) ?? '',
       serialLeft: (d['serialLeft'] as String?) ?? '',
       serialRight: (d['serialRight'] as String?) ?? '',
-      batterySize: (d['batterySize'] as String?) ?? '',
+      batterySize: BatterySize.fromWire(d['batterySize'] as String?),
       tubing: Tubing.fromWire(d['tubing'] as String?),
       powerSource: PowerSource.fromWire(d['powerSource'] as String?),
       colour: (d['colour'] as String?) ?? '',
@@ -430,11 +557,11 @@ class Device {
   Map<String, dynamic> toFirestore({required String createdBy}) => {
     'brand': brand,
     'model': model,
-    'type': type,
+    'type': type.wire,
     'year': year,
     'serialLeft': serialLeft,
     'serialRight': serialRight,
-    'batterySize': batterySize,
+    'batterySize': batterySize.wire,
     'tubing': tubing.wire,
     'powerSource': powerSource.wire,
     'colour': colour,
@@ -476,9 +603,9 @@ class Device {
       id: '1',
       brand: 'Phonak',
       model: 'Audéo P90',
-      type: 'RIC',
+      type: Style.ric,
       year: '2021',
-      batterySize: '312',
+      batterySize: BatterySize.size312,
       qaStatus: QaStatus.passed,
       status: DeviceStatus.ready,
     ),
@@ -486,9 +613,9 @@ class Device {
       id: '2',
       brand: 'Oticon',
       model: 'More 1',
-      type: 'BTE',
+      type: Style.bte,
       year: '2022',
-      batterySize: '13',
+      batterySize: BatterySize.size13,
       qaStatus: QaStatus.pendingQa,
       status: DeviceStatus.donated,
     ),
@@ -496,9 +623,9 @@ class Device {
       id: '3',
       brand: 'Signia',
       model: 'Pure 7Nx',
-      type: 'RIC',
+      type: Style.ric,
       year: '2020',
-      batterySize: '312',
+      batterySize: BatterySize.size312,
       qaStatus: QaStatus.passed,
       status: DeviceStatus.matched,
     ),
@@ -506,9 +633,9 @@ class Device {
       id: '4',
       brand: 'GN Resound',
       model: 'ONE 9',
-      type: 'RIC',
+      type: Style.ric,
       year: '2023',
-      batterySize: 'Rechargeable',
+      batterySize: BatterySize.rechargeable,
       qaStatus: QaStatus.pendingQa,
       status: DeviceStatus.donated,
     ),
@@ -516,9 +643,9 @@ class Device {
       id: '5',
       brand: 'Widex',
       model: 'Moment 440',
-      type: 'RIC',
+      type: Style.ric,
       year: '2021',
-      batterySize: '10',
+      batterySize: BatterySize.size10,
       qaStatus: QaStatus.failed,
       status: DeviceStatus.servicing,
     ),
