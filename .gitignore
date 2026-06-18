@@ -54,3 +54,9 @@ data/sam2_b.pt
 spike_crop_*.png
 spike_sam3_*/
 spike_in/
+
+# Task #57 EdgeSAM-vs-crop spike outputs (reproducible from spike_crop_vs_segment.py)
+data/spike_cvs/
+data/spike_cvs_sweep/
+data/spike_cvs_sweep2/
+data/spike_scale/
