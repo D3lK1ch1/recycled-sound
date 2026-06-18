@@ -5,6 +5,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 import '../../scanner/data/brand_matcher.dart';
 import '../../scanner/data/vision_ocr.dart';
+import 'ocr_crop_pyramid.dart';
 
 /// What OCR managed to read off the captured stills.
 class CaptureId {
@@ -47,24 +48,57 @@ class CaptureOcr {
   /// Read brand/model from the given image files (the brand-label / medial
   /// shots). Returns the best match found, or null if nothing matched. Never
   /// throws — a recognizer or decode failure just yields fewer tokens.
+  ///
+  /// Each still is expanded into the **full frame plus a multi-scale center-crop
+  /// pyramid** ([kOcrCropFractions]) before OCR, and the tokens from every scale
+  /// are unioned. Full-frame OCR already reads most brand labels, but hard
+  /// low-contrast / embossed ones only surface at a tighter crop (#58,
+  /// `technical_ocr_crop_pyramid.md`) — and OCR is non-monotonic in scale, so a
+  /// label invisible at one fraction reads at another. The crops are temp files
+  /// deleted before this returns; if cropping fails we still OCR the original.
   Future<CaptureId?> identify(List<String> imagePaths) async {
-    final mlkitTokens = await _mlkitTokens(imagePaths);
-    final visionTokens = await _visionTokens(imagePaths);
+    final expanded = await _expandWithCrops(imagePaths);
+    try {
+      final mlkitTokens = await _mlkitTokens(expanded.paths);
+      final visionTokens = await _visionTokens(expanded.paths);
 
-    final fused = <String>[...mlkitTokens, ...visionTokens];
-    final result = _matchTokens(fused);
+      final fused = <String>[...mlkitTokens, ...visionTokens];
+      final result = _matchTokens(fused);
 
-    // Shadow A/B: log what each engine would have found on its own, so a real
-    // device capture session tells us whether Vision .accurate is pulling its
-    // weight vs ML Kit (or whether either alone would suffice).
-    if (kDebugMode && Platform.isIOS) {
-      final mlkitOnly = _matchTokens(mlkitTokens);
-      final visionOnly = _matchTokens(visionTokens);
-      debugPrint('CaptureOcr A/B over ${imagePaths.length} still(s): '
-          'mlkit=$mlkitOnly  vision=$visionOnly  fused=$result');
+      // Shadow A/B: log what each engine would have found on its own, so a real
+      // device capture session tells us whether Vision .accurate is pulling its
+      // weight vs ML Kit (or whether either alone would suffice).
+      if (kDebugMode && Platform.isIOS) {
+        final mlkitOnly = _matchTokens(mlkitTokens);
+        final visionOnly = _matchTokens(visionTokens);
+        debugPrint('CaptureOcr A/B over ${imagePaths.length} still(s), '
+            '${expanded.paths.length} frame(s) incl. crops: '
+            'mlkit=$mlkitOnly  vision=$visionOnly  fused=$result');
+      }
+
+      return result;
+    } finally {
+      await expanded.dispose();
     }
+  }
 
-    return result;
+  /// Expand each still into itself + its center-crop pyramid. Crops are written
+  /// to a single temp dir (deleted by [_ExpandedStills.dispose]); a still that
+  /// can't be decoded simply contributes only its full frame.
+  Future<_ExpandedStills> _expandWithCrops(List<String> imagePaths) async {
+    Directory? tempDir;
+    try {
+      tempDir = await Directory.systemTemp.createTemp('ocr_crops_');
+    } catch (_) {
+      // No temp dir → fall back to full-frame-only OCR (never regress).
+      return _ExpandedStills(paths: imagePaths, tempDir: null);
+    }
+    final paths = <String>[];
+    for (final path in imagePaths) {
+      paths.add(path); // full frame first — it reads most labels on its own
+      paths.addAll(await writeOcrCropPyramid(path, tempDir));
+    }
+    return _ExpandedStills(paths: paths, tempDir: tempDir);
   }
 
   /// ML Kit tokens from every readable still (best-effort, both platforms).
@@ -142,4 +176,24 @@ class CaptureOcr {
   }
 
   void dispose() => _recognizer?.close();
+}
+
+/// The full-frame stills plus their temp crop files, bundled with the temp dir
+/// so the caller can clean up in a `finally` regardless of OCR outcome.
+class _ExpandedStills {
+  _ExpandedStills({required this.paths, required this.tempDir});
+
+  /// Every path to OCR: each original still followed by its center-crops.
+  final List<String> paths;
+
+  /// The temp dir holding the crop files, or null if none was created.
+  final Directory? tempDir;
+
+  /// Remove the temp crop files. Best-effort — a cleanup failure must never
+  /// surface from an otherwise-successful identify().
+  Future<void> dispose() async {
+    try {
+      await tempDir?.delete(recursive: true);
+    } catch (_) {}
+  }
 }
