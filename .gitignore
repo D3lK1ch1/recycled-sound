@@ -50,3 +50,4 @@ data/spike_reticle/
 data/spike_sam2b/
 data/spike_loop/
 data/dinov2_catalog.npz
+data/sam2_b.pt
