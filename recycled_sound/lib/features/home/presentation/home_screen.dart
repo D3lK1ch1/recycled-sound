@@ -12,7 +12,7 @@ import '../../capture/providers/capture_seed.dart';
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
-  /// Box-first entry: the box/bag number is the FIRST thing a volunteer enters,
+  /// Box-first entry: the box number is the FIRST thing a volunteer enters,
   /// before any camera opens. Both home CTAs route through this modal — on OK we
   /// stash the box in [scanBoxProvider] and navigate; on Cancel we do nothing.
   ///
@@ -191,7 +191,7 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-/// Box-first entry dialog: the volunteer enters the box/bag number before any
+/// Box-first entry dialog: the volunteer enters the box number before any
 /// camera opens. Pops the entered text on OK, `null` on Cancel.
 ///
 /// A `StatefulWidget` so it owns its `TextEditingController` and disposes it in
@@ -232,7 +232,7 @@ class _BoxEntryDialogState extends State<_BoxEntryDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Enter the number on the box or bag before you start.',
+            'Enter the number on the box before you start.',
             style: AppTypography.caption.copyWith(color: muted),
           ),
           const SizedBox(height: 16),
@@ -258,7 +258,7 @@ class _BoxEntryDialogState extends State<_BoxEntryDialog> {
               labelStyle: TextStyle(color: muted),
               hintText: 'e.g. B07, C10',
               hintStyle: TextStyle(color: Color(0xFF555555)),
-              helperText: 'The label on the box or bag',
+              helperText: 'The label on the box',
               helperStyle: TextStyle(color: muted),
               enabledBorder: UnderlineInputBorder(
                 borderSide: BorderSide(color: Color(0xFF444444)),

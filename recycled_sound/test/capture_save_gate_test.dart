@@ -17,7 +17,7 @@ import 'support/google_fonts_test_asset.dart';
 
 /// Behavioural tests for CaptureScreen's save gate (#288, #96).
 ///
-/// Box-first reorg (#96): the box/bag number is entered up front in the home
+/// Box-first reorg (#96): the box number is entered up front in the home
 /// box-first modal, NOT in the capture screen — the capture `_DetailsDialog` is
 /// gone. The box now arrives via [CaptureSeed.box] (scanner→confirm→capture) or
 /// [scanBoxProvider] (direct capture). This pins the *save-gate invariant*: a

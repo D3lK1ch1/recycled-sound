@@ -199,7 +199,7 @@ class _ConfirmationScreenState extends ConsumerState<ConfirmationScreen>
                         .updateField(ScanField.colour, v),
                   ),
 
-                  // NB: the box/bag number is NOT collected here. It is the
+                  // NB: the box number is NOT collected here. It is the
                   // FIRST thing the volunteer enters (the box-first modal on the
                   // home screen, stored in `scanBoxProvider`), so the confirm
                   // screen just reads it through to the created device.

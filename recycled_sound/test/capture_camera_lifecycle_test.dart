@@ -163,7 +163,7 @@ void main() {
         reason: 'the queue self-heals: a thrown dispose does not freeze it');
   }, skip: !fontReady);
 
-  // The box/bag number is the only handle that ties a capture's photo set back
+  // The box number is the only handle that ties a capture's photo set back
   // to its physical device in the register. Box-first reorg (#96): it is now
   // entered up front in the home box-first modal (stored in scanBoxProvider),
   // NOT in this screen — the in-screen details dialog is gone. The bar is now a

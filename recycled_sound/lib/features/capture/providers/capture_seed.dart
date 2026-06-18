@@ -43,7 +43,7 @@ class CaptureSeed {
 /// device; `null` for a standalone capture entered directly from home.
 final captureSeedProvider = StateProvider<CaptureSeed?>((ref) => null);
 
-/// The box/bag number the volunteer enters in the box-first modal dialog when
+/// The box number the volunteer enters in the box-first modal dialog when
 /// they tap a home button (Scan or Capture) — the FIRST thing they do, and the
 /// ONLY place a box number is entered. Read by the confirm screen (to seed the
 /// created device's `location`) and by a standalone capture (entered directly
