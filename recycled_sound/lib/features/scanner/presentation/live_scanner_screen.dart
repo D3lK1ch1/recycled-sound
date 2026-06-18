@@ -30,6 +30,7 @@ import '../data/frame_preprocessor.dart';
 import '../data/insight_engine.dart';
 import '../data/ocr_token_accumulator.dart';
 import '../data/scan_tracker.dart';
+import '../data/stillness_detector.dart';
 import '../data/vision_ocr.dart';
 import 'widgets/capture_animator.dart';
 import 'widgets/capture_stack.dart';
@@ -154,6 +155,17 @@ class _LiveScanScreenState extends State<LiveScanScreen>
     threshold: 8, // 8/12 consensus — stricter than 5/8 for muted palette
   );
 
+  // ── Option D: motion-stop trigger ──────────────────────────────────
+  // The cheap, always-on change signal. Downstream (segment → identify)
+  // will eventually fire ONCE when the aid comes to rest. For now this only
+  // surfaces live telemetry (debug overlay) so we can watch it fire on a real
+  // held-then-rested device before building the heavy stage on top.
+  final StillnessDetector _stillness = StillnessDetector();
+  // Debug-only telemetry string, e.g. "AT REST  Δ2.3". A ValueNotifier so only
+  // the tiny telemetry widget rebuilds — NOT the whole Stack every frame, which
+  // would itself eat the frame budget we hold sacred.
+  final ValueNotifier<String> _stillTelemetry = ValueNotifier('');
+
   // ── Captures & upload ──────────────────────────────────────────────
   final List<CapturedFeature> _captures = [];
   final List<SnapEvent> _snapEvents = [];
@@ -267,6 +279,7 @@ class _LiveScanScreenState extends State<LiveScanScreen>
     _stopCamera();
     _textRecognizer.close();
     _brandClassifier.dispose();
+    _stillTelemetry.dispose();
     super.dispose();
   }
 
@@ -447,6 +460,19 @@ class _LiveScanScreenState extends State<LiveScanScreen>
     int colourUs = 0, prepUs = 0, ocrUs = 0, matchUs = 0, stateUs = 0;
     int ocrBlocks = 0;
     try {
+      // Option D motion-stop signal — runs on raw bytes, both platforms,
+      // a few thousand byte subtractions (resolution-independent). This is the
+      // cheap trigger half of "motion-stop → segment → identify"; the heavy
+      // segment/identify pass will hang off the rising edge of isStill later.
+      if (image.planes.isNotEmpty) {
+        final atRest = _stillness.push(image.planes[0].bytes);
+        if (kDebugMode) {
+          _stillTelemetry.value =
+              '${atRest ? 'AT REST' : 'MOVING '}  '
+              'Δ${_stillness.lastDelta.isFinite ? _stillness.lastDelta.toStringAsFixed(1) : '—'}';
+        }
+      }
+
       // Colour sampling — runs on raw bytes, sub-millisecond.
       // Gated: only starts once ML Kit has found at least one text block,
       // which means something interesting (a hearing aid) is in frame.
@@ -1908,6 +1934,40 @@ class _LiveScanScreenState extends State<LiveScanScreen>
                 left: 12,
                 bottom: 24,
                 child: _buildMlkitDebugOverlay(),
+              ),
+
+            // Option D motion-stop telemetry (debug only) — top-right.
+            // Watch Δ drop and the badge flip to AT REST when a held aid
+            // comes to rest. Rebuilds only this tiny widget, not the Stack.
+            if (kDebugMode)
+              Positioned(
+                right: 12,
+                top: MediaQuery.of(context).padding.top + 60,
+                child: ValueListenableBuilder<String>(
+                  valueListenable: _stillTelemetry,
+                  builder: (context, text, _) {
+                    if (text.isEmpty) return const SizedBox.shrink();
+                    final atRest = text.startsWith('AT REST');
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: (atRest ? Colors.green : Colors.black)
+                            .withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        text,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
 
             // Capture animations + thumbnail dock
