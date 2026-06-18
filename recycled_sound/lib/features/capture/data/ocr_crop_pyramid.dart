@@ -39,18 +39,23 @@ const List<double> kOcrCropFractions = [0.40, 0.60, 0.80];
 
 /// Center-crop [src] to [frac] (0..1) of each dimension, keeping the middle.
 ///
-/// Mirrors the certification harness's `center_crop` (`data/certify_ocr_first.py`):
-/// `m = (1 - frac) / 2` margin on every side. No scaling — the returned image is
-/// `frac` of the source's pixels at native resolution.
+/// Reproduces the certification harness's center-crop *scale*
+/// (`data/certify_ocr_first.py:100`, `arr[int(h*m):int(h*(1-m))]` with
+/// `m = (1-frac)/2`) to within ≤1px — close enough that the app path crops the
+/// same content we certified 8/8 (`feedback_harness_matches_production_path`),
+/// while staying robust to floating-point drift. (The harness floor-slices each
+/// margin; `int(1000*(1-0.2))` lands at `799` because `0.8` isn't exact in IEEE.
+/// We instead size by `round(dim*frac)` and center symmetrically, so the crop is
+/// always exactly `frac` of the dimension and never off by a float-rounding
+/// fluke.) No scaling — `frac` of the source's pixels at native resolution.
 img.Image centerCrop(img.Image src, double frac) {
-  final m = (1.0 - frac) / 2.0;
-  final x = (src.width * m).round();
-  final y = (src.height * m).round();
-  // Guard against a zero-size crop on a tiny image; copyCrop clamps anyway, but
-  // a width/height of 0 would throw.
+  // Guard against a zero-size crop on a tiny image; copyCrop would throw on a
+  // width/height of 0.
   final w = (src.width * frac).round().clamp(1, src.width);
   final h = (src.height * frac).round().clamp(1, src.height);
-  return img.copyCrop(src, x: x, y: y, width: w, height: h);
+  final x0 = ((src.width - w) / 2).round();
+  final y0 = ((src.height - h) / 2).round();
+  return img.copyCrop(src, x: x0, y: y0, width: w, height: h);
 }
 
 /// Decode the still at [path], write its center-crop pyramid as temp JPEGs into

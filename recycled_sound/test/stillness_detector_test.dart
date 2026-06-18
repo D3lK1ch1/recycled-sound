@@ -82,6 +82,19 @@ void main() {
       expect(everStill, isFalse);
     });
 
+    test('empty plane is not still and never yields a NaN delta', () {
+      final d = StillnessDetector(stillFrames: 1, stillThreshold: 6);
+      expect(d.push(Uint8List(0)), isFalse);
+      expect(d.lastDelta, double.infinity);
+      expect(d.lastDelta.isNaN, isFalse);
+      // An empty frame between two real frames must not diff across the gap:
+      // the frame after it re-primes rather than reporting a bogus stillness.
+      d.push(_frame(100));
+      expect(d.push(Uint8List(0)), isFalse);
+      expect(d.push(_frame(100)), isFalse); // re-primed, no comparable prev
+      expect(d.push(_frame(100)), isTrue); // now diffable -> still
+    });
+
     test('downsampling does not break the diff (strided buffers)', () {
       // stride 64 over a 4096-byte buffer samples 64 bytes; uniform frames
       // keep the signal intact end-to-end.

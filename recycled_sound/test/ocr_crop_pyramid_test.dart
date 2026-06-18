@@ -44,6 +44,31 @@ void main() {
       expect(crop.height, 40);
     });
 
+    test('crops the centered pixels — origin is pinned, not just the size', () {
+      // Mark a single pixel dead-center; after a 40% center-crop it must land at
+      // the crop's center. Dimensions alone wouldn't catch an off-by-origin bug.
+      final src = img.Image(width: 10, height: 10);
+      img.fill(src, color: img.ColorRgb8(0, 0, 0));
+      src.setPixelRgb(5, 5, 255, 0, 0); // marker
+      // frac 0.4 on 10px: m=0.3 -> x0=floor(3)=3, x1=floor(7)=7, w=4.
+      final crop = centerCrop(src, 0.40);
+      expect(crop.width, 4);
+      // Source (5,5) maps to crop (5-3, 5-3) = (2,2).
+      final p = crop.getPixel(2, 2);
+      expect(p.r, 255);
+      expect(p.g, 0);
+    });
+
+    test('size is robust to float drift (matches harness scale within 1px)',
+        () {
+      // 1000px, frac 0.6: the harness's int(1000*(1-0.2)) floors 799.999.. to
+      // 799 (a float fluke). round(1000*0.6)=600 is the stable, correct size.
+      expect(centerCrop(img.Image(width: 1000, height: 1000), 0.60).width, 600);
+      // Odd dim stays exactly frac of the dimension, centered.
+      final odd = centerCrop(img.Image(width: 15, height: 15), 0.40);
+      expect(odd.width, 6); // round(15*0.4)=6
+    });
+
     test('tiny image never yields a zero-size crop', () {
       final src = img.Image(width: 2, height: 2);
       final crop = centerCrop(src, 0.40); // 0.4*2 = 0.8 → rounds to 1, clamped

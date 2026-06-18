@@ -16,6 +16,14 @@ import 'dart:typed_data';
 /// consecutive frames. Because it only diffs a strided down-sample, the cost is
 /// a few thousand byte subtractions per frame regardless of resolution.
 ///
+/// **Zero per-frame allocation.** This runs on the throughput-sacred camera hot
+/// path, so it never allocates while streaming: two fixed sample buffers are
+/// ping-ponged (this frame downsamples into one, diffs against the other), and
+/// they're (re)allocated only on the first frame or a buffer-length change
+/// (resolution/format switch). An earlier version allocated a fresh down-sample
+/// every frame — ~32KB (1080p luma) to ~129KB (BGRA) of young-gen garbage per
+/// frame competing with OCR — which the #108 cage match correctly rejected.
+///
 /// Format-agnostic by design: it never interprets the bytes as pixels, only as
 /// a change signal. Motion perturbs the buffer whatever the channel layout, so
 /// the same code works for NV21 luma and BGRA alike. If a sharper signal is
@@ -40,7 +48,16 @@ class StillnessDetector {
   /// Consecutive sub-threshold frames required before declaring stillness.
   final int stillFrames;
 
-  Uint8List? _prevSamples;
+  // Two fixed sample buffers, ping-ponged frame to frame. [_writeToA] picks the
+  // one the NEXT frame downsamples into; the other holds the previous frame's
+  // samples to diff against. We snapshot into our own buffer (rather than alias
+  // [bytes]) because camera plugins may recycle the frame buffer between
+  // callbacks — aliasing would make every diff read as zero and falsely report
+  // stillness.
+  Uint8List? _bufA;
+  Uint8List? _bufB;
+  bool _writeToA = true;
+  bool _hasPrev = false;
   int _stillStreak = 0;
   bool _isStill = false;
 
@@ -56,13 +73,43 @@ class StillnessDetector {
   ///
   /// The first call (and any call where the buffer length changes — a
   /// resolution or format switch) can't be diffed, so it resets the streak and
-  /// returns false.
+  /// returns false. An empty plane is treated the same way (and re-primes), so
+  /// the mean-difference is never computed over zero samples.
   bool push(Uint8List bytes) {
-    final samples = _downsample(bytes);
-    final prev = _prevSamples;
-    _prevSamples = samples;
+    if (bytes.isEmpty) {
+      // Not comparable; don't claim stillness, and force the next real frame to
+      // re-prime rather than diff across the gap. (Guards the 0/0 = NaN hole.)
+      _hasPrev = false;
+      _stillStreak = 0;
+      _isStill = false;
+      _lastDelta = double.infinity;
+      return false;
+    }
 
-    if (prev == null || prev.length != samples.length) {
+    final count = ((bytes.length - 1) ~/ stride) + 1;
+    if (_bufA == null || _bufA!.length != count) {
+      // First frame, or a resolution/format switch: (re)allocate both buffers
+      // once and start a fresh prime — no comparable previous frame yet.
+      _bufA = Uint8List(count);
+      _bufB = Uint8List(count);
+      _writeToA = true;
+      _hasPrev = false;
+      _stillStreak = 0;
+      _isStill = false;
+      _lastDelta = double.infinity;
+    }
+
+    // Downsample into the current buffer (no allocation), diff against the prev.
+    final cur = _writeToA ? _bufA! : _bufB!;
+    final prev = _writeToA ? _bufB! : _bufA!;
+    var j = 0;
+    for (var i = 0; i < bytes.length; i += stride) {
+      cur[j++] = bytes[i];
+    }
+    _writeToA = !_writeToA; // next frame writes into the other buffer
+
+    if (!_hasPrev) {
+      _hasPrev = true;
       _stillStreak = 0;
       _isStill = false;
       _lastDelta = double.infinity;
@@ -70,11 +117,11 @@ class StillnessDetector {
     }
 
     var sum = 0;
-    for (var i = 0; i < samples.length; i++) {
-      final d = samples[i] - prev[i];
+    for (var i = 0; i < cur.length; i++) {
+      final d = cur[i] - prev[i];
       sum += d < 0 ? -d : d;
     }
-    final delta = sum / samples.length;
+    final delta = sum / cur.length;
     _lastDelta = delta;
 
     if (delta <= stillThreshold) {
@@ -89,26 +136,13 @@ class StillnessDetector {
 
   /// Clear all state. Call after a capture fires so the *next* time the object
   /// comes to rest is treated as a fresh trigger rather than re-firing on the
-  /// same stationary device.
+  /// same stationary device. Keeps the allocated buffers for reuse — only the
+  /// "have a comparable previous frame" flag is dropped.
   void reset() {
-    _prevSamples = null;
+    _hasPrev = false;
+    _writeToA = true;
     _stillStreak = 0;
     _isStill = false;
     _lastDelta = double.infinity;
-  }
-
-  /// Copy out a strided down-sample. We snapshot the samples (rather than hold a
-  /// reference to [bytes]) because camera plugins may recycle the underlying
-  /// frame buffer between callbacks — aliasing the previous frame would make
-  /// every diff read as zero and falsely report stillness.
-  Uint8List _downsample(Uint8List bytes) {
-    if (bytes.isEmpty) return Uint8List(0);
-    final count = ((bytes.length - 1) ~/ stride) + 1;
-    final out = Uint8List(count);
-    var j = 0;
-    for (var i = 0; i < bytes.length; i += stride) {
-      out[j++] = bytes[i];
-    }
-    return out;
   }
 }

@@ -161,10 +161,14 @@ class _LiveScanScreenState extends State<LiveScanScreen>
   // surfaces live telemetry (debug overlay) so we can watch it fire on a real
   // held-then-rested device before building the heavy stage on top.
   final StillnessDetector _stillness = StillnessDetector();
-  // Debug-only telemetry string, e.g. "AT REST  Δ2.3". A ValueNotifier so only
+  // Debug-only telemetry: the two-state signal as a record, NOT a string. The
+  // hot path sets two primitives; the debug widget formats them. (The #108 cage
+  // match flagged the earlier "AT REST  Δ2.3"-then-startsWith design as a
+  // stringly-typed closed set built on the frame loop.) A ValueNotifier so only
   // the tiny telemetry widget rebuilds — NOT the whole Stack every frame, which
-  // would itself eat the frame budget we hold sacred.
-  final ValueNotifier<String> _stillTelemetry = ValueNotifier('');
+  // would itself eat the frame budget we hold sacred. Null until the first frame.
+  final ValueNotifier<({bool atRest, double delta})?> _stillTelemetry =
+      ValueNotifier(null);
 
   // ── Captures & upload ──────────────────────────────────────────────
   final List<CapturedFeature> _captures = [];
@@ -467,9 +471,16 @@ class _LiveScanScreenState extends State<LiveScanScreen>
       if (image.planes.isNotEmpty) {
         final atRest = _stillness.push(image.planes[0].bytes);
         if (kDebugMode) {
-          _stillTelemetry.value =
-              '${atRest ? 'AT REST' : 'MOVING '}  '
-              'Δ${_stillness.lastDelta.isFinite ? _stillness.lastDelta.toStringAsFixed(1) : '—'}';
+          // Two primitives only — no string work on the hot path. Skip the
+          // notify when neither value changed meaningfully so a stable view
+          // doesn't churn the listener every frame.
+          final prev = _stillTelemetry.value;
+          final delta = _stillness.lastDelta;
+          if (prev == null ||
+              prev.atRest != atRest ||
+              (prev.delta - delta).abs() > 0.1) {
+            _stillTelemetry.value = (atRest: atRest, delta: delta);
+          }
         }
       }
 
@@ -1943,11 +1954,14 @@ class _LiveScanScreenState extends State<LiveScanScreen>
               Positioned(
                 right: 12,
                 top: MediaQuery.of(context).padding.top + 60,
-                child: ValueListenableBuilder<String>(
+                child: ValueListenableBuilder<({bool atRest, double delta})?>(
                   valueListenable: _stillTelemetry,
-                  builder: (context, text, _) {
-                    if (text.isEmpty) return const SizedBox.shrink();
-                    final atRest = text.startsWith('AT REST');
+                  builder: (context, telemetry, _) {
+                    if (telemetry == null) return const SizedBox.shrink();
+                    final atRest = telemetry.atRest;
+                    final deltaText = telemetry.delta.isFinite
+                        ? telemetry.delta.toStringAsFixed(1)
+                        : '—';
                     return Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 4),
@@ -1957,7 +1971,7 @@ class _LiveScanScreenState extends State<LiveScanScreen>
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        text,
+                        '${atRest ? 'AT REST' : 'MOVING '}  Δ$deltaText',
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 11,
