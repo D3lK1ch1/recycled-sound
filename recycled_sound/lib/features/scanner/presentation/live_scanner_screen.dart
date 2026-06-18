@@ -1850,39 +1850,11 @@ class _LiveScanScreenState extends State<LiveScanScreen>
           children: [
             // Camera preview or fallback states
             if (_cameraReady && _cameraController != null)
-              LayoutBuilder(
-                builder: (context, constraints) => GestureDetector(
-                  // Tap-to-focus: Android has no macro/near-focus restriction
-                  // (that's the iOS-only FocusControlPlugin), so a close-held
-                  // aid can sit blurry under continuous AF → garbage OCR reads
-                  // ("Drubu" instead of "Signia"). Tapping the label re-points
-                  // focus + exposure there to grab a sharp frame on demand.
-                  onTapDown: (d) =>
-                      _onFocusTap(d.localPosition, constraints.biggest),
-                  child: _buildCameraPreview(),
-                ),
-              )
+              _buildCameraPreview()
             else if (_cameraError != null)
               _buildError()
             else
               Container(color: Colors.black),
-
-            // Tap-to-focus reticle — brief confirmation the refocus registered.
-            if (_focusReticle != null)
-              Positioned(
-                left: _focusReticle!.dx - 28,
-                top: _focusReticle!.dy - 28,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.success, width: 2),
-                    ),
-                  ),
-                ),
-              ),
 
             // Boot sequence overlay
             if (_phase == _ScanPhase.booting) _buildBootSequence(),
@@ -2065,6 +2037,40 @@ class _LiveScanScreenState extends State<LiveScanScreen>
 
             // Completion overlay
             if (_showCompletion) _buildCompletionOverlay(),
+
+            // Tap-to-focus: a full-screen catcher layered ABOVE the decorative
+            // overlays (feature boxes, capture animations) but BELOW the bottom
+            // HUD that follows, so button taps still win. Android has no macro/
+            // near-focus restriction (that's the iOS-only FocusControlPlugin),
+            // so a close-held aid sits blurry under continuous AF and OCR reads
+            // garbage ("Drubu" not "Signia"); tapping the label re-points focus
+            // + exposure there to grab a sharp frame on demand. Translucent so a
+            // tap that isn't on a control still reaches anything beneath it.
+            if (_cameraReady && _cameraController != null)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapDown: (d) =>
+                      _onFocusTap(d.localPosition, MediaQuery.of(context).size),
+                ),
+              ),
+
+            // Tap-to-focus reticle — drawn above the catcher so it's visible.
+            if (_focusReticle != null)
+              Positioned(
+                left: _focusReticle!.dx - 28,
+                top: _focusReticle!.dy - 28,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.success, width: 2),
+                    ),
+                  ),
+                ),
+              ),
 
             // Bottom HUD + insights + capture controls
             if (_phase != _ScanPhase.booting && _cameraReady)
