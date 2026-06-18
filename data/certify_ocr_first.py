@@ -52,7 +52,7 @@ from PIL import Image, ImageOps
 # that OCR may catch instead of the maker). Ground-truth tokens normalize to these.
 BRANDS = ["resound", "oticon", "phonak", "unitron", "signia", "widex", "beltone",
           "gn", "starkey", "bernafon", "hansaton", "rexton", "blamey", "saunders",
-          "audeo", "nera", "moxi", "nexia"]
+          "sonic", "audeo", "nera", "moxi", "nexia"]
 # brand aliases -> canonical (OCR/model words that imply a maker)
 ALIAS = {"audeo": "phonak", "nera": "oticon", "moxi": "unitron", "nexia": "resound",
          "gn": "resound", "saunders": "blamey"}

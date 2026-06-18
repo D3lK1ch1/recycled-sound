@@ -7,7 +7,7 @@ import ImageIO
 import CoreGraphics
 
 let brandWords = ["ReSound","Oticon","Phonak","Unitron","Signia","Widex","Beltone",
-                  "GN","Starkey","Bernafon","Hansaton","Rexton","Audeo","Nera","Moxi"]
+                  "GN","Starkey","Bernafon","Hansaton","Rexton","Sonic","Audeo","Nera","Moxi"]
 
 func loadCG(_ path: String) -> (CGImage, CGImagePropertyOrientation)? {
     guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
