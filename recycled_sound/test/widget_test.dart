@@ -138,6 +138,11 @@ void main() {
 
     // Enter the box and confirm — only now does it route to the scanner.
     await tester.enterText(find.byType(TextField).first, 'b07');
+    // Let the OK button's ValueListenableBuilder rebuild — it's disabled until
+    // the box field has text (the require-non-empty gate, #96/d3e4ee10), so
+    // without this frame the tap below lands on a still-disabled button and
+    // nothing navigates.
+    await tester.pump();
     await tester.tap(find.text('OK'));
     await tester.pump(); // start navigation
     await tester.pump(const Duration(milliseconds: 600)); // route transition
